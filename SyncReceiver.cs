@@ -10,6 +10,12 @@
 //   float alpha = sync.Get("alpha");     // one band, mapped to 0..1 and smoothed
 //   float all   = sync.Combined;         // weighted mix of all bands, 0..1
 //   float score = sync.Score;            // the engine's own headline score, 0..1
+//   float plv   = sync.GetPlv("gamma");  // raw phase-locking value as sent, 0..1
+//   float aec   = sync.GetAec("gamma");  // raw envelope correlation as sent, -1..1
+//
+// On screen (toggle "Show Overlay"): PLV and AEC for alpha, gamma and theta,
+// exactly as the engine sends them. The overlay does not depend on the Measure,
+// weights or calibration below; those only shape Get() and Combined.
 //
 // Band names are the engine's (Unicorn Bandpower's): delta, theta, alpha,
 // beta_low, beta_mid, beta_high, gamma.
@@ -17,6 +23,7 @@
 // Bands list picks up the new names (the old "beta" no longer exists).
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -71,14 +78,15 @@ public class SyncReceiver : MonoBehaviour
     [Header("Bands")]
     public Band[] bands =
     {
-        // delta 0 as it is the most noisy
+        // delta and gamma start at weight 0: delta is the band most polluted by eye and
+        // head movement, gamma by muscle activity. Both are still received and readable.
         new Band("delta", 0f),
         new Band("theta", 1f),
         new Band("alpha", 1f),
         new Band("beta_low", 1f),
         new Band("beta_mid", 1f),
         new Band("beta_high", 1f),
-        new Band("gamma", 1f),
+        new Band("gamma", 0f),
     };
 
     [Header("Calibration")]
@@ -86,6 +94,12 @@ public class SyncReceiver : MonoBehaviour
     public bool calibrateOnStart = true;
     [Tooltip("How long to observe the players before fixing each band's low/high range.")]
     public float calibrationSeconds = 60f;
+
+    [Header("On-screen display")]
+    [Tooltip("Draw PLV and AEC for the bands below in the top-left corner of the Game view.")]
+    public bool showOverlay = true;
+    [Tooltip("Bands shown in the overlay, in this order.")]
+    public string[] displayBands = { "alpha", "gamma", "theta" };
 
     [Header("Output")]
     [Tooltip("Fires every frame with the Combined value while a signal is present.")]
@@ -108,6 +122,12 @@ public class SyncReceiver : MonoBehaviour
         return b != null ? b.value01 : 0f;
     }
 
+    /// <summary>Phase-locking value for any engine band, exactly as sent (0..1). 0 until it arrives.</summary>
+    public float GetPlv(string bandName) => _raw.TryGetValue(bandName + "/plv", out float v) ? v : 0f;
+
+    /// <summary>Amplitude-envelope correlation for any engine band, exactly as sent (-1..1). 0 until it arrives.</summary>
+    public float GetAec(string bandName) => _raw.TryGetValue(bandName + "/aec", out float v) ? v : 0f;
+
     /// <summary>Latest unmapped value for one band, exactly as the hub sent it.</summary>
     public float GetRaw(string bandName)
     {
@@ -122,6 +142,10 @@ public class SyncReceiver : MonoBehaviour
     bool _everCalibrated;
     float _calStart;
     volatile float _score;
+    // Every /sync/<band>/<measure> value as received, keyed "band/measure". Filled by the
+    // network thread, so the overlay and GetPlv/GetAec work for any band the engine sends,
+    // whether or not it is in the Bands list above.
+    readonly ConcurrentDictionary<string, float> _raw = new ConcurrentDictionary<string, float>();
 
     // The above-chance measure has a fixed meaning, so stretching it to the
     // range seen in the first minute would throw that meaning away.
@@ -217,6 +241,48 @@ public class SyncReceiver : MonoBehaviour
         }
         Combined = weightSum > 0f ? sum / weightSum : 0f;
         if (HasSignal) onCombinedChanged?.Invoke(Combined);
+    }
+
+    // ---------- on-screen display ----------
+
+    void OnGUI()
+    {
+        if (!showOverlay || displayBands == null) return;
+        const float width = 340f, row = 24f;
+        float height = 40f + displayBands.Length * 2 * row + 6f;
+
+        GUI.color = new Color(0f, 0f, 0f, 0.7f);
+        GUI.DrawTexture(new Rect(12f, 12f, width, height), Texture2D.whiteTexture);
+        GUI.color = Color.white;
+        GUI.Label(new Rect(22f, 18f, width, 22f), HasSignal ? "EEG synchrony" : "EEG synchrony - no signal");
+
+        float y = 46f;
+        foreach (string band in displayBands)
+        {
+            DrawRow(y, band + " PLV", band + "/plv", 0f, 1f);     // 0 = unrelated, 1 = locked
+            y += row;
+            DrawRow(y, band + " AEC", band + "/aec", -1f, 1f);    // bar grows left or right of the centre
+            y += row;
+        }
+    }
+
+    void DrawRow(float y, string label, string key, float min, float max)
+    {
+        bool has = _raw.TryGetValue(key, out float value);
+        GUI.color = Color.white;
+        GUI.Label(new Rect(22f, y, 110f, 22f), label);
+        // "--" until the engine has sent this value (AEC needs about 12 s of data)
+        GUI.Label(new Rect(134f, y, 52f, 22f), has ? value.ToString(min < 0f ? "+0.00;-0.00" : "0.00") : "--");
+
+        var track = new Rect(190f, y + 7f, 148f, 8f);
+        GUI.color = new Color(1f, 1f, 1f, 0.2f);
+        GUI.DrawTexture(track, Texture2D.whiteTexture);
+        if (!has) return;
+        float zero = Mathf.InverseLerp(min, max, 0f);
+        float at = Mathf.InverseLerp(min, max, value);
+        GUI.color = Color.white;
+        GUI.DrawTexture(new Rect(track.x + track.width * Mathf.Min(zero, at), track.y,
+                                 track.width * Mathf.Abs(at - zero), track.height), Texture2D.whiteTexture);
     }
 
     void FinishCalibration()
@@ -318,12 +384,14 @@ public class SyncReceiver : MonoBehaviour
         else
         {
             if (parts.Length != 4) return;
+            _raw[parts[2] + "/" + parts[3]] = value;
             Band band = Find(parts[2]);
-            if (band == null) return;
-            if (parts[3] == "plv") band.plv = value;
-            else if (parts[3] == "plvc") band.plvc = value;
-            else if (parts[3] == "aec") band.aec = value;
-            else return;
+            if (band != null)
+            {
+                if (parts[3] == "plv") band.plv = value;
+                else if (parts[3] == "plvc") band.plvc = value;
+                else if (parts[3] == "aec") band.aec = value;
+            }
         }
         Interlocked.Exchange(ref _lastPacketTicks, DateTime.UtcNow.Ticks);
     }

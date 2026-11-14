@@ -8,11 +8,13 @@
 // (`lastTimestamp`), e.g. to line game events up with a LabRecorder file.
 // Both can run in the same scene: they use different transports.
 //
-// Channel labels sent by the engine (60 in total):
+// Channel labels sent by the engine (74 in total):
 //   score
 //   plv_<band>            phase-locking value, 0..1
 //   plv_chance_<band>     chance floor for that PLV
 //   plv_corrected_<band>  PLV above the chance floor, 0..1
+//   pli_<band>            control: phase lag index, 0..1
+//   ccorr_<band>          control: circular correlation, -1..1
 //   phase_diff_<band>     mean phase difference A-B, radians
 //   aec_<band>            amplitude-envelope correlation, -1..1
 //   power_corr_<band>     band-power correlation, -1..1
