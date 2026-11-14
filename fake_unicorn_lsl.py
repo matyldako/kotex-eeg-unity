@@ -9,7 +9,9 @@ fake_unicorn_lsl.py - two simulated UnicornLSL streams for testing without heads
 Each stream looks like UnicornLSL output: 17 channels at 250 Hz, sent in bursts,
 with large electrode offsets. Both "brains" have theta (~6 Hz), alpha (~10 Hz)
 and gamma (~40 Hz) rhythms - the three bands shown in the Unity overlay - plus
-noise. Like real people, the two have slightly different frequencies.
+noise. Like real people, the two have slightly different frequencies, and each
+person's alpha frequency wanders a little, so the alpha PLV swings from second to
+second as it does in a real two-headset recording (see FREQ_WANDER).
 
 The simulation steps through four states, 30 s each, so that every measure in
 synchrony_engine.py has a state where it should respond and states where it
@@ -18,7 +20,9 @@ should not. The console prints the current state.
   state         what the two brains share                 expected in the engine / viewer
   -----------   ----------------------------------------  --------------------------------------
   independent   nothing                                   PLV ~0.2, at its chance floor; PLI ~0.2;
-                                                          AEC near 0; Granger small both ways
+                                                          AEC near 0; Granger small both ways.
+                                                          Alpha PLV is higher and more varied: about
+                                                          0.33 on average, 0.1 to 0.7+ second to second
   phase         the rhythms' PHASE; B runs 60 degrees     PLV and PLI ~0.7-0.9 (gamma lowest),
                 behind A. Strengths stay independent.     circular corr. clearly positive;
                                                           AEC stays low
@@ -57,6 +61,15 @@ STATES = ["independent", "phase", "amplitude", "directed"]
 RHYTHMS = {"theta": (5.6, 6.4, 8.0), "alpha": (9.6, 10.5, 12.0), "gamma": (38.0, 41.0, 8.0)}
 NOISE_UV = 6.0          # independent sensor/background noise on every electrode
 PHASE_WANDER = 0.05     # rad per sample; makes each rhythm drift like real EEG
+# Extra slow wander of each person's rhythm FREQUENCY, per rhythm: (size in Hz, seconds it takes to change).
+# Only alpha has it. In a real two-headset recording the alpha PLV swings between about 0.1 and 0.7 from
+# one second to the next without the two people being coupled, because each person's alpha frequency is
+# never steady: in some seconds the two happen to run at the same speed (high PLV), in others they drift
+# apart quickly (low PLV). Theta and gamma are left steady.
+# Size: 0.2 Hz puts the mean 1 s alpha PLV near 0.33, as in the recording; larger = wider swings and a
+# higher mean. Seconds: 0.3 leaves one second unrelated to the next, as in the recording; larger = each
+# high or low spell lasts longer.
+FREQ_WANDER = {"theta": (0.0, 1.0), "alpha": (0.2, 0.3), "gamma": (0.0, 1.0)}
 PHASE_LAG = np.pi / 3   # in the "phase" state B runs 60 degrees behind A.
                         # Not 0: the phase lag index ignores locking at exactly 0 or 180 degrees.
 ENVELOPE_TAU = 1.0      # seconds; how slowly a rhythm's strength rises and falls
@@ -87,6 +100,8 @@ class TwoBrains:
                               [fb for _, fb, _ in RHYTHMS.values()]])    # (person, rhythm)
         self.amp = np.array([a for _, _, a in RHYTHMS.values()])
         self.phase = self.rng.uniform(0, 2 * np.pi, (2, k))          # current phase, per person and rhythm
+        self.freq_wander_hz = np.array([FREQ_WANDER[name][0] for name in RHYTHMS])
+        self.freq_wander = [SlowNoise(self.rng, (2,), FREQ_WANDER[name][1]) for name in RHYTHMS]   # per rhythm
         self.env_own = SlowNoise(self.rng, (2, k), ENVELOPE_TAU)      # each person's own strength changes
         self.env_shared = SlowNoise(self.rng, (k,), ENVELOPE_TAU)     # strength changes common to both
         self.drive = SlowNoise(self.rng, (2,), 0.006)                 # broadband background activity per person
@@ -97,8 +112,9 @@ class TwoBrains:
         """n new samples for both people: array (2, n, 17)."""
         k = len(RHYTHMS)
 
-        # --- phase: every rhythm advances at its frequency plus a random wander
-        steps = 2 * np.pi * self.freq / FS + self.rng.normal(0, PHASE_WANDER, (n, 2, k))
+        # --- phase: every rhythm advances at its frequency (alpha's own frequency wanders) plus a random wander
+        freq = self.freq + self.freq_wander_hz * np.stack([w.next(n) for w in self.freq_wander], axis=2)
+        steps = 2 * np.pi * freq / FS + self.rng.normal(0, PHASE_WANDER, (n, 2, k))
         phases = self.phase + np.cumsum(steps, axis=0)                # (n, person, rhythm)
         if state == "phase":
             phases[:, 1, :] = phases[:, 0, :] - PHASE_LAG             # B follows A's phase exactly, 60 deg behind
