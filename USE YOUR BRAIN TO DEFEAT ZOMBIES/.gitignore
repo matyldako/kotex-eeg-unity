@@ -1,0 +1,51 @@
+# Unity generated directories
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+
+# MemoryCaptures and Recordings
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Asset store downloaded packages (optional - remove if you want to commit third-party assets)
+/[Aa]ssets/[Aa]sset[Ss]tore[Tt]ools*
+
+# Visual Studio / Rider / VS Code generated files
+.vs/
+.idea/
+.vscode/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Unity3D generated meta/cache files
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+sysinfo.txt
+
+# Builds and crash reports
+*.apk
+*.aab
+*.unitypackage
+*.app
+crashlytics-build.properties
+
+# OS-specific files
+.DS_Store
+Thumbs.db

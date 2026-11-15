@@ -1,0 +1,3 @@
+repository "USE YOUR BRAIN TO DEFEAT ZOMBIES@TrileyONE@cloud"
+  path "/"
+    smartbranch "/main"
